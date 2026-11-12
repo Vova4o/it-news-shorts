@@ -1,0 +1,28 @@
+# binaries
+/bin/
+/it-news-shorts
+*.exe
+*.test
+*.out
+
+# local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# coverage and profiles
+coverage.out
+coverage.html
+*.prof
+
+# editors and OS
+.idea/
+.vscode/
+.DS_Store
+
+# local media and generated artifacts
+/tmp/
+/var/
+*.mp4
+*.mp3
+*.wav

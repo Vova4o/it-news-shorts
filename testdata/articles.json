@@ -1,0 +1,22 @@
+[
+  {
+    "ID": "art-01",
+    "URL": "https://example.com/news/go-1-24",
+    "Title": "Go 1.24 released",
+    "Summary": "The Go team shipped a new release with toolchain updates.",
+    "Source": "example.com",
+    "Language": "en",
+    "PublishedAt": "2026-11-12T06:30:00Z",
+    "FetchedAt": "2026-11-12T07:00:00Z"
+  },
+  {
+    "ID": "art-02",
+    "URL": "https://example.org/news/kubernetes-1-33",
+    "Title": "Kubernetes 1.33 released",
+    "Summary": "A new Kubernetes minor version reached general availability.",
+    "Source": "example.org",
+    "Language": "en",
+    "PublishedAt": "2026-11-12T05:00:00Z",
+    "FetchedAt": "2026-11-12T07:00:00Z"
+  }
+]
