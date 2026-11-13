@@ -17,6 +17,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/it-news-shorts/it-news-shorts/internal/config"
+	"github.com/it-news-shorts/it-news-shorts/internal/news"
 	"github.com/it-news-shorts/it-news-shorts/internal/observability"
 	"github.com/it-news-shorts/it-news-shorts/internal/postgres"
 	"github.com/it-news-shorts/it-news-shorts/internal/storage"
@@ -83,17 +84,56 @@ func main() {
 		Metrics:     metrics,
 	}
 
+	defaultSources, err := news.DefaultSources(cfg.News)
+	if err != nil {
+		logger.Error("load news sources failed", "error", err.Error())
+		os.Exit(1)
+	}
+	newsRepo := postgres.NewNewsRepository(pgPool, cfg.Postgres.QueryTimeout)
+	if err := newsRepo.EnsureSources(ctx, defaultSources); err != nil {
+		logger.Error("ensure news sources failed", "error", err.Error())
+		os.Exit(1)
+	}
+	newsHTTP := news.NewHTTPClient(news.HTTPClientOptions{
+		Timeout:        cfg.News.HTTPTimeout,
+		MaxBytes:       cfg.News.HTTPMaxBytes,
+		MaxConcurrency: cfg.News.MaxConcurrency,
+		UserAgent:      cfg.News.UserAgent,
+	})
+	newsActivities := &workflows.NewsActivities{
+		Repo:       newsRepo,
+		HTTPClient: newsHTTP,
+		NewsConfig: cfg.News,
+		Sources:    defaultSources,
+		Logger:     logger,
+		Metrics:    metrics,
+	}
+
 	w := worker.New(temporalClient, cfg.Temporal.TaskQueue, worker.Options{
 		WorkerStopTimeout: cfg.Worker.ShutdownTimeout,
 	})
 	w.RegisterWorkflowWithOptions(workflows.InfrastructureSmokeWorkflow, workflow.RegisterOptions{
 		Name: workflows.SmokeWorkflowName,
 	})
+	w.RegisterWorkflowWithOptions(workflows.NewsIngestionWorkflow, workflow.RegisterOptions{
+		Name: workflows.NewsIngestionWorkflowName,
+	})
+	w.RegisterWorkflowWithOptions(workflows.DailyNewsSnapshotWorkflow, workflow.RegisterOptions{
+		Name: workflows.DailyNewsSnapshotWorkflowName,
+	})
 	w.RegisterActivityWithOptions(activities.CreateSmokeRun, activity.RegisterOptions{Name: "CreateSmokeRun"})
 	w.RegisterActivityWithOptions(activities.UploadAndVerifyArtifact, activity.RegisterOptions{Name: "UploadAndVerifyArtifact"})
 	w.RegisterActivityWithOptions(activities.PersistMediaAsset, activity.RegisterOptions{Name: "PersistMediaAsset"})
 	w.RegisterActivityWithOptions(activities.CompleteSmokeRun, activity.RegisterOptions{Name: "CompleteSmokeRun"})
 	w.RegisterActivityWithOptions(activities.FailSmokeRun, activity.RegisterOptions{Name: "FailSmokeRun"})
+	w.RegisterActivityWithOptions(newsActivities.ListEnabledSources, activity.RegisterOptions{Name: "ListEnabledSources"})
+	w.RegisterActivityWithOptions(newsActivities.FetchAndPersistSource, activity.RegisterOptions{Name: "FetchAndPersistSource"})
+	w.RegisterActivityWithOptions(newsActivities.CreateDailySnapshot, activity.RegisterOptions{Name: "CreateDailySnapshot"})
+
+	if err := workflows.EnsureNewsSchedules(ctx, temporalClient, cfg.Temporal.TaskQueue, cfg.News, logger); err != nil {
+		logger.Error("ensure news schedules failed", "error", err.Error())
+		os.Exit(1)
+	}
 
 	metricsSrv := startMetricsServer(cfg.Worker.MetricsListenAddr, metrics, logger)
 	defer func() {

@@ -12,6 +12,9 @@ UTC+3 фиксировано с 2014 года, поэтому часовой п�
 
 ## Шаги прогона
 
+0. **Непрерывный сбор и ежедневный снимок (TASK 004).**
+   - `NewsIngestionWorkflow` (schedule `news-ingestion-schedule`, каждые 30 минут) собирает новости из Hacker News API и RSS/Atom-источников, нормализует, дедуплицирует и сохраняет в PostgreSQL.
+   - `DailyNewsSnapshotWorkflow` (schedule `daily-news-snapshot-schedule`, ежедневно в 09:00 MSK) фиксирует срез статей за `[window_start, window_end)` с отметкой `FULL_COVERAGE` или `PARTIAL_COVERAGE`.
 1. **Создание прогона.** `DailyRun` с окном новостей и `MaxStories ≤ 3`.
 2. **Сбор.** `NewsCollector.Collect(ctx, window)`; статьи вне окна отбрасываются,
    дубликаты по URL и ID — через `domain.Registry`.

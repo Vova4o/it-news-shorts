@@ -40,6 +40,15 @@ const (
 	defaultTemporalTaskQueue       = "IT_NEWS_QUEUE"
 	defaultTemporalActivityTimeout = 2 * time.Minute
 	defaultTemporalWorkflowTimeout = 10 * time.Minute
+
+	defaultNewsIngestionInterval = 30 * time.Minute
+	defaultNewsHTTPTimeout       = 15 * time.Second
+	defaultNewsHTTPMaxBytes      = int64(5 << 20) // 5 MiB
+	defaultNewsMaxConcurrency    = 5
+	defaultNewsUserAgent         = "it-news-shorts/1.0 (+https://github.com/it-news-shorts/it-news-shorts)"
+	defaultNewsHNBaseURL         = "https://hacker-news.firebaseio.com/v0"
+	defaultNewsHNLimit           = 30
+	defaultNewsRSSLimit          = 50
 )
 
 // Config holds all infrastructure and runtime configuration.
@@ -50,6 +59,22 @@ type Config struct {
 	Postgres PostgresConfig
 	MinIO    MinIOConfig
 	Temporal TemporalConfig
+	News     NewsConfig
+}
+
+// NewsConfig holds news collector, HTTP client, and schedule settings.
+type NewsConfig struct {
+	IngestionInterval time.Duration
+	SchedulesEnabled  bool
+	HTTPTimeout       time.Duration
+	HTTPMaxBytes      int64
+	MaxConcurrency    int
+	UserAgent         string
+	HNBaseURL         string
+	HNLimit           int
+	HNLists           []string
+	RSSLimit          int
+	ExtraRSSSources   string
 }
 
 // AppConfig holds general runtime settings.
@@ -208,6 +233,44 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 
+	if cfg.News.IngestionInterval, err = parseDuration(lookup, "NEWS_INGESTION_INTERVAL", defaultNewsIngestionInterval); err != nil {
+		return Config{}, err
+	}
+	if cfg.News.SchedulesEnabled, err = parseBool(lookup, "NEWS_SCHEDULES_ENABLED", true); err != nil {
+		return Config{}, err
+	}
+	if cfg.News.HTTPTimeout, err = parseDuration(lookup, "NEWS_HTTP_TIMEOUT", defaultNewsHTTPTimeout); err != nil {
+		return Config{}, err
+	}
+	if cfg.News.HTTPMaxBytes, err = parseInt64(lookup, "NEWS_HTTP_MAX_BYTES", defaultNewsHTTPMaxBytes); err != nil {
+		return Config{}, err
+	}
+	maxConc, err := parseInt32(lookup, "NEWS_HTTP_MAX_CONCURRENCY", defaultNewsMaxConcurrency)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.News.MaxConcurrency = int(maxConc)
+	cfg.News.UserAgent = get("NEWS_HTTP_USER_AGENT", defaultNewsUserAgent)
+	cfg.News.HNBaseURL = strings.TrimRight(get("NEWS_HN_BASE_URL", defaultNewsHNBaseURL), "/")
+	hnLimit, err := parseInt32(lookup, "NEWS_HN_LIMIT", defaultNewsHNLimit)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.News.HNLimit = int(hnLimit)
+	rawLists := get("NEWS_HN_LISTS", "top,new,best")
+	for _, part := range strings.Split(rawLists, ",") {
+		p := strings.TrimSpace(strings.ToLower(part))
+		if p != "" {
+			cfg.News.HNLists = append(cfg.News.HNLists, p)
+		}
+	}
+	rssLimit, err := parseInt32(lookup, "NEWS_RSS_LIMIT", defaultNewsRSSLimit)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.News.RSSLimit = int(rssLimit)
+	cfg.News.ExtraRSSSources = get("NEWS_EXTRA_RSS_SOURCES", "")
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -251,6 +314,24 @@ func (c Config) Validate() error {
 	}
 	if c.Temporal.WorkflowTimeout <= 0 {
 		return fmt.Errorf("config: TEMPORAL_WORKFLOW_TIMEOUT must be positive")
+	}
+	if c.News.IngestionInterval <= 0 {
+		return fmt.Errorf("config: NEWS_INGESTION_INTERVAL must be positive")
+	}
+	if c.News.HTTPTimeout <= 0 {
+		return fmt.Errorf("config: NEWS_HTTP_TIMEOUT must be positive")
+	}
+	if c.News.HTTPMaxBytes <= 0 {
+		return fmt.Errorf("config: NEWS_HTTP_MAX_BYTES must be positive")
+	}
+	if c.News.MaxConcurrency < 1 {
+		return fmt.Errorf("config: NEWS_HTTP_MAX_CONCURRENCY must be >= 1")
+	}
+	if c.News.HNLimit < 1 {
+		return fmt.Errorf("config: NEWS_HN_LIMIT must be >= 1")
+	}
+	if c.News.RSSLimit < 1 {
+		return fmt.Errorf("config: NEWS_RSS_LIMIT must be >= 1")
 	}
 	return nil
 }
