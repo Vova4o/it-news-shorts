@@ -2,63 +2,22 @@
 
 ## Принципы
 
-- Тесты домена не требуют ни базы данных, ни сети, ни Docker: всё
-  детерминировано, время передаётся явно.
-- Основной стиль — table-driven tests с `t.Run` на каждый случай.
-- Проверяются наблюдаемые контракты: ошибки через `errors.Is`, поля через
-  `errors.As(*domain.ValidationError)`.
-- Внешние сервисы не мокируются в production-коде. Когда появятся адаптеры,
-  фейки будут жить только в тестовых файлах.
+- Unit-тесты (`go test ./...`) не требуют Docker, PostgreSQL, MinIO, Temporal или доступа в Интернет.
+- Интеграционные тесты изолированы тегом сборки `//go:build integration` и запускаются отдельно через `make test-integration`.
+- Реальные загрузки на YouTube в обычных и интеграционных тестах не выполняются.
 
-## Что покрыто сейчас
+## Уровни тестов
 
-| Требование | Тест |
-| --- | --- |
-| Создание валидного `VideoJob` | `TestNewVideoJob`, `TestNewVideoJobDefaultsMaxAttempts` |
-| Допустимые переходы | `TestTransitionTable` (успешные строки) |
-| Запрещённые переходы | `TestTransitionTable` (строки с `ErrInvalidTransition`) |
-| Публикация без валидации | `TestPublishWithoutValidationIsForbidden`, `TestFailedValidationBlocksUpload` |
-| Повторный переход в то же состояние | `TestTransitionTable`, `TestSinglePublicationPerJob` |
-| Обязательные поля | `TestNewVideoJobRejectsInvalidInput`, `TestModelValidation` |
-| Длительность 15–30 секунд | `TestShortsDurationBounds`, `TestVideoValidationRules` |
-| Время запуска и границы 24 часов | `TestMoscowScheduleNextRun`, `TestWindowForCoversPrevious24Hours`, `TestTimeWindowRejectsWrongLength` |
-| Уникальность ID и ключей идемпотентности | `TestRegistryRejectsDuplicateIDs`, `TestRegistryRejectsDuplicateIdempotencyKeys`, `TestIdempotencyKeyFormat`, `TestIdentifierConstructors` |
+| Уровень | Команда | Покрытие |
+| --- | --- | --- |
+| Unit | `make test-unit` | Домен, конфиг, observability, S3 key builder, Temporal `WorkflowTestSuite` (success, retries, permanent errors, timeout, cancel), YouTube client/journal |
+| Race | `make test-race` | Детектор гонок для всех unit-тестов |
+| Integration | `make test-integration` | Миграции Goose, CRUD/FK/UTC/optimistic locking, `PGJournal` без pool starvation + миграция файла, MinIO lifecycle/presign/failures, live `InfrastructureSmokeWorkflow` + idempotency, backup/restore в отдельную тестовую БД |
+| Smoke | `make smoke-test` | End-to-end запуск `InfrastructureSmokeWorkflow` через CLI с независимой перепроверкой PostgreSQL и MinIO |
 
-Дополнительно: `TestRetryAttemptsAreLimited`, `TestRetryFromFailureKeepsResumeState`
-(лимит попыток и возврат в `ResumeState`), `TestSelectStories*` (отбор сюжетов),
-`TestLedger*` (бюджеты), `TestSampleArticlesAreValid` (фикстура
-`testdata/articles.json` декодируется в модели и проходит валидацию),
-`TestSourceValidation`.
+## CI (`.github/workflows/ci.yml`)
 
-## Запуск
-
-```bash
-go test ./...            # быстрый прогон
-go test -race ./...      # гонки, обязательны в CI
-go test -run TestTransitionTable -v ./internal/domain
-go test -cover ./...
-```
-
-## CI
-
-`.github/workflows/ci.yml` на каждый push и pull request:
-
-1. `go build ./...`;
-2. `go vet ./...`;
-3. `go test ./...`;
-4. `go test -race ./...`.
-
-Форматирование проверяется локально: `make fmt` переформатирует файлы,
-`make fmt-check` только сообщает о расхождениях. В CI шаг `gofmt` не включён,
-чтобы пайплайн не зависел от версии форматтера.
-
-Локальный аналог: `make ci`.
-
-## Что появится дальше
-
-- Контрактные тесты адаптеров (YouTube, LLM, TTS, MinIO) на записанных ответах.
-- Тесты Temporal workflow через `testsuite.WorkflowTestSuite` с
-  детерминированным временем.
-- Интеграционные тесты PostgreSQL на `testcontainers-go` (отдельный тег
-  `integration`, чтобы `go test ./...` оставался быстрым).
-- Golden-тесты FFmpeg-рендера: длительность, разрешение, наличие аудио.
+1. `gofmt`, `go build ./...`, `go vet ./...`, `go test -count=1 ./...`, `go test -race -count=1 ./...`.
+2. Проверка отсутствия секретов в репозитории.
+3. Валидация `docker-compose.yml` и `docker-compose.prod.yml` (`make compose-check`).
+4. Поднятие изолированного Compose-стека, проверка `/readyz`, идемпотентности миграций, `make test-integration` и `make smoke-test`.

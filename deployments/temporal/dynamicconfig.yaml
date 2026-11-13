@@ -1,0 +1,4 @@
+# Temporal Server dynamic configuration for local and production Compose.
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true
+    constraints: {}

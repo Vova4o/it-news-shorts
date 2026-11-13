@@ -1,0 +1,35 @@
+.git
+.gitignore
+.github
+.codebase-graph
+.DS_Store
+
+# Local environment files and secrets (keep .env.example)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*credentials*.json
+*client_secret*.json
+*oauth*.json
+*token*.json
+tokens/
+secrets/
+
+# Local build outputs, journals, backups, media
+bin/
+dist/
+out/
+tmp/
+backups/
+data/
+media/
+journal/
+*journal*.json
+*.log
+*.bak
+*.sql.gz
+*.dump
+coverage*.out

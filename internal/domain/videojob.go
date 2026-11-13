@@ -325,3 +325,211 @@ func (v VideoValidation) Validate() error {
 	}
 	return nil
 }
+
+// VideoJobSnapshot is the persistence-friendly representation of VideoJob.
+type VideoJobSnapshot struct {
+	ID             VideoJobID
+	DailyRunID     DailyRunID
+	StoryID        StoryID
+	IdempotencyKey IdempotencyKey
+	State          VideoState
+	ResumeState    VideoState
+	Attempts       int
+	MaxAttempts    int
+	Validation     *VideoValidation
+	PublicationID  PublicationID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	ValidatedAt    time.Time
+	UploadedAt     time.Time
+	ScheduledAt    time.Time
+	PublishedAt    time.Time
+}
+
+// Snapshot returns a copy of the job state for persistence.
+func (j *VideoJob) Snapshot() VideoJobSnapshot {
+	var valCopy *VideoValidation
+	if j.validation != nil {
+		v := *j.validation
+		valCopy = &v
+	}
+	return VideoJobSnapshot{
+		ID:             j.id,
+		DailyRunID:     j.dailyRunID,
+		StoryID:        j.storyID,
+		IdempotencyKey: j.idempotencyKey,
+		State:          j.state,
+		ResumeState:    j.resumeState,
+		Attempts:       j.attempts,
+		MaxAttempts:    j.maxAttempts,
+		Validation:     valCopy,
+		PublicationID:  j.publicationID,
+		CreatedAt:      j.createdAt,
+		UpdatedAt:      j.updatedAt,
+		ValidatedAt:    j.validatedAt,
+		UploadedAt:     j.uploadedAt,
+		ScheduledAt:    j.scheduledAt,
+		PublishedAt:    j.publishedAt,
+	}
+}
+
+// RehydrateVideoJob restores a VideoJob from persisted storage while enforcing
+// domain invariants.
+func RehydrateVideoJob(s VideoJobSnapshot) (*VideoJob, error) {
+	var valCopy *VideoValidation
+	if s.Validation != nil {
+		if err := s.Validation.Validate(); err != nil {
+			return nil, err
+		}
+		v := *s.Validation
+		valCopy = &v
+	}
+	job := &VideoJob{
+		id:             s.ID,
+		dailyRunID:     s.DailyRunID,
+		storyID:        s.StoryID,
+		idempotencyKey: s.IdempotencyKey,
+		state:          s.State,
+		resumeState:    s.ResumeState,
+		attempts:       s.Attempts,
+		maxAttempts:    s.MaxAttempts,
+		validation:     valCopy,
+		publicationID:  s.PublicationID,
+		createdAt:      s.CreatedAt.UTC(),
+		updatedAt:      s.UpdatedAt.UTC(),
+		validatedAt:    toUTC(s.ValidatedAt),
+		uploadedAt:     toUTC(s.UploadedAt),
+		scheduledAt:    toUTC(s.ScheduledAt),
+		publishedAt:    toUTC(s.PublishedAt),
+	}
+	if job.updatedAt.IsZero() {
+		job.updatedAt = job.createdAt
+	}
+	if err := job.Validate(); err != nil {
+		return nil, err
+	}
+	if err := job.validateRehydratedLifecycle(); err != nil {
+		return nil, err
+	}
+	return job, nil
+}
+
+func (j *VideoJob) validateRehydratedLifecycle() error {
+	if j.updatedAt.Before(j.createdAt) {
+		return invalid("video_job.updated_at")
+	}
+
+	// Check state-specific guard preconditions (passed validation, publication).
+	switch j.state {
+	case StateValidated, StateUploaded, StateScheduled, StatePublished:
+		if err := j.guard(j.state); err != nil {
+			return err
+		}
+	case StateRetryPending:
+		if j.attempts < 1 {
+			return invalid("video_job.attempts")
+		}
+		if !retryable(j.resumeState) {
+			return invalid("video_job.resume_state")
+		}
+		if err := j.guard(j.resumeState); err != nil {
+			return err
+		}
+	case StateFailed, StateRejected:
+		if j.resumeState != "" && (!j.resumeState.Valid() || !retryable(j.resumeState)) {
+			return invalid("video_job.resume_state")
+		}
+	default:
+		if j.resumeState != "" {
+			return invalid("video_job.resume_state")
+		}
+	}
+
+	// If a publication is attached, AttachPublication preconditions must hold.
+	if j.publicationID != "" {
+		if j.validation == nil || !j.validation.Passed {
+			return fmt.Errorf("%w: video job %s has publication without passed validation", ErrValidationRequired, j.id)
+		}
+		if j.uploadedAt.IsZero() {
+			return missing("video_job.uploaded_at")
+		}
+	}
+
+	// Enforce required lifecycle timestamps for reached states.
+	effectiveState := j.state
+	if (j.state == StateRetryPending || j.state == StateFailed) && j.resumeState != "" {
+		effectiveState = j.resumeState
+	}
+	switch effectiveState {
+	case StateValidated:
+		if j.validatedAt.IsZero() {
+			return missing("video_job.validated_at")
+		}
+	case StateUploaded:
+		if j.validatedAt.IsZero() {
+			return missing("video_job.validated_at")
+		}
+		if j.uploadedAt.IsZero() {
+			return missing("video_job.uploaded_at")
+		}
+	case StateScheduled:
+		if j.validatedAt.IsZero() {
+			return missing("video_job.validated_at")
+		}
+		if j.uploadedAt.IsZero() {
+			return missing("video_job.uploaded_at")
+		}
+		if j.scheduledAt.IsZero() {
+			return missing("video_job.scheduled_at")
+		}
+	case StatePublished:
+		if j.validatedAt.IsZero() {
+			return missing("video_job.validated_at")
+		}
+		if j.uploadedAt.IsZero() {
+			return missing("video_job.uploaded_at")
+		}
+		if j.scheduledAt.IsZero() {
+			return missing("video_job.scheduled_at")
+		}
+		if j.publishedAt.IsZero() {
+			return missing("video_job.published_at")
+		}
+	}
+
+	// Enforce monotonic timestamp ordering for any populated lifecycle timestamps.
+	if err := checkTimestampOrder(j.createdAt, j.updatedAt, j.validatedAt, j.uploadedAt, j.scheduledAt, j.publishedAt); err != nil {
+		return err
+	}
+	if !j.uploadedAt.IsZero() && j.validatedAt.IsZero() {
+		return missing("video_job.validated_at")
+	}
+	if !j.scheduledAt.IsZero() && (j.uploadedAt.IsZero() || j.publicationID == "") {
+		return invalid("video_job.scheduled_at")
+	}
+	if !j.publishedAt.IsZero() && (j.scheduledAt.IsZero() || j.publicationID == "") {
+		return invalid("video_job.published_at")
+	}
+	return nil
+}
+
+func checkTimestampOrder(createdAt, updatedAt time.Time, stamps ...time.Time) error {
+	prev := createdAt
+	for _, ts := range stamps {
+		if ts.IsZero() {
+			continue
+		}
+		if ts.Before(createdAt) || ts.After(updatedAt) || ts.Before(prev) {
+			return invalid("video_job.lifecycle_timestamps")
+		}
+		prev = ts
+	}
+	return nil
+}
+
+func toUTC(t time.Time) time.Time {
+	if t.IsZero() {
+		return time.Time{}
+	}
+	return t.UTC()
+}

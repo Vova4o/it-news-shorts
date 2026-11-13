@@ -1,87 +1,50 @@
 # it-news-shorts
 
-Полностью автоматизированный сервис производства и публикации IT-новостей в
-YouTube Shorts: сбор новостей за 24 часа, отбор до трёх сюжетов, проверка
-фактов, сценарий на русском, озвучка, визуал, монтаж 15–30 секунд, публикация
-по расписанию, учёт расходов и отчёт в Telegram.
+Автономный сервис производства и публикации IT-новостей в YouTube Shorts.
 
-## Текущий этап (TASK 001)
+## Текущий этап (TASK 003)
 
-Реализован только фундамент: доменные модели, машина состояний, порты внешних
-сервисов, планировщик 09:00 Europe/Moscow, документация и unit-тесты.
+Реализован инфраструктурный слой, персистентность и движок рабочих процессов поверх доменной архитектуры (TASK 001) и YouTube-интеграции (TASK 002):
 
-Осознанно **не** подключены: LLM API, TTS API, Video Generation API, YouTube
-Data API, Temporal, PostgreSQL, MinIO, FFmpeg. Моков в production-коде нет:
-есть только интерфейсы и доменная логика.
-
-## Требования
-
-- Go 1.22 или новее
-- GNU Make (опционально, все команды доступны напрямую через `go`)
-
-## Проверки
-
-```bash
-go fmt ./...
-go vet ./...
-go test ./...
-go test -race ./...
-```
-
-То же через Makefile:
-
-```bash
-make fmt      # gofmt -l -w .
-make vet      # go vet ./...
-make test     # go test ./...
-make race     # go test -race ./...
-make ci       # fmt + vet + test + race
-make build    # сборка трёх бинарников в bin/
-```
-
-`make fmt` переформатирует файлы; чтобы проверить форматирование без правок,
-используйте `make fmt-check`.
-
-## Структура
-
-```
-cmd/api        HTTP API (пока заглушка, веб-интерфейс запрещён на этом этапе)
-cmd/worker     будущий Temporal worker и ежедневный пайплайн
-cmd/cli        операторские команды (schedule, version)
-internal/domain     модели, идентификаторы, машина состояний, расписание
-internal/news       порт NewsCollector
-internal/editor     отбор сюжетов (не более трёх, без дублей)
-internal/ai         порты StoryRanker и FactChecker
-internal/script     порт ScriptGenerator
-internal/audio      порт TTSProvider
-internal/video      порты VideoGenerationProvider, VideoRenderer, VideoValidator
-internal/youtube    порт VideoPublisher
-internal/storage    порт ObjectStorage
-internal/analytics  бюджет и журнал расходов
-internal/notify     порт Notifier и отчёт о прогоне
-internal/workflows  контракт DailyRunWorkflow и набор шагов
-migrations          SQL-миграции (появятся вместе с PostgreSQL)
-configs             конфигурация окружений (появятся вместе с загрузчиком)
-deployments         Docker Compose и инфраструктура (следующие этапы)
-testdata            фикстуры для тестов
-docs                архитектура, workflow, домен, тестирование, roadmap, ADR
-```
+- **Docker Compose (8 сервисов):** PostgreSQL 16, `temporal-init`, Temporal Server (`temporalio/server`, без `auto-setup`), Temporal UI, MinIO, `minio-init`, Go API, Go Worker.
+- **PostgreSQL 16 + Goose:** 12 таблиц (включая `youtube_upload_journal`), `pgx/v5` + `pgxpool`, raw SQL репозитории (`DailyRun`, `VideoJob`, `Publication`, `MediaAsset`, `Story`), транзакционные переходы состояния и optimistic concurrency.
+- **MinIO (AWS SDK v2):** потоковая загрузка с проверкой размера и SHA-256, приватный бакет, presigned URLs, сверка сиротских объектов.
+- **Temporal:** `InfrastructureSmokeWorkflow` и идемпотентные Activities с retry policy и детерминизмом.
+- **API & CLI:** `GET /healthz`, `GET /readyz`, `GET /metrics` (Prometheus), `cli infra {smoke-test,status,check-db,check-storage,migrate-up,migrate-down,migrate-youtube-journal}`.
 
 ## Быстрый старт
 
 ```bash
-make test
-go run ./cmd/cli schedule
-go run ./cmd/worker
+cp .env.example .env
+make infra-up
+make infra-status
+make smoke-test
 ```
 
-`cmd/cli schedule` печатает ближайшие запуски и 24-часовые окна новостей.
+Локальные адреса (loopback `127.0.0.1`):
+- Go API: `http://127.0.0.1:8083` (`/healthz`, `/readyz`, `/metrics`)
+- Temporal UI: `http://127.0.0.1:8082`
+- MinIO Console: `http://127.0.0.1:9001`
+- PostgreSQL: `127.0.0.1:5433` (`it_news`)
+
+## Проверки
+
+```bash
+make ci                # fmt-check + vet + test-unit + test-race
+make compose-check     # проверка dev и prod Compose-конфигураций
+make test-integration  # интеграционные тесты (PG, MinIO, Temporal, backup/restore)
+make smoke-test        # live InfrastructureSmokeWorkflow через CLI
+```
 
 ## Документация
 
-- [docs/architecture.md](docs/architecture.md) — компоненты и зависимости
-- [docs/workflow.md](docs/workflow.md) — путь от новости до публикации
-- [docs/domain.md](docs/domain.md) — модели и переходы состояний
-- [docs/testing.md](docs/testing.md) — стратегия тестирования
-- [docs/roadmap.md](docs/roadmap.md) — дальнейшие этапы
-- [docs/decisions](docs/decisions) — архитектурные решения (ADR)
+- [docs/architecture.md](docs/architecture.md) — архитектура и слои
+- [docs/domain.md](docs/domain.md) — доменные модели и машина состояний
+- [docs/infrastructure.md](docs/infrastructure.md) — Docker Compose, порты, логи и метрики
+- [docs/database.md](docs/database.md) — PostgreSQL, миграции, репозитории и PGJournal
+- [docs/storage.md](docs/storage.md) — MinIO / S3
+- [docs/temporal.md](docs/temporal.md) — Temporal Server, Worker и smoke workflow
+- [docs/testing.md](docs/testing.md) — стратегия тестирования и CI
+- [docs/backup-restore.md](docs/backup-restore.md) — резервное копирование и восстановление
+- [docs/deployment.md](docs/deployment.md) — локальное и production-развёртывание
+- [docs/decisions](docs/decisions) — ADR (включая [0004-database-migrations.md](docs/decisions/0004-database-migrations.md))

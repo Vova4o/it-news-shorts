@@ -44,12 +44,23 @@ type journalFile struct {
 
 const journalVersion = 1
 
+// UploadJournal is the consumer-owned persistence contract for idempotent
+// YouTube upload state. Both the local file Journal and PostgreSQL journal
+// implement this interface.
+type UploadJournal interface {
+	AcquireKey(ctx context.Context, key string) (func(), error)
+	Get(ctx context.Context, key string) (JournalEntry, bool, error)
+	FindByVideoID(ctx context.Context, videoID string) (JournalEntry, bool, error)
+	Put(ctx context.Context, entry JournalEntry) error
+	List(ctx context.Context) ([]JournalEntry, error)
+}
+
 // Journal is a durable local record of upload operations keyed by our own
 // idempotency key. YouTube does not deduplicate videos.insert by such a key,
 // so this journal is what prevents a second video on a repeated call.
 //
-// Until PostgreSQL arrives (TASK 006) the journal lives in one JSON file that
-// is replaced atomically and protected by advisory file locks across processes.
+// The file-based journal lives in one JSON file that is replaced atomically and
+// protected by advisory file locks across processes.
 type Journal struct {
 	path string
 	mu   chan struct{}
@@ -124,7 +135,7 @@ func (j *Journal) FindByVideoID(ctx context.Context, videoID string) (JournalEnt
 
 // Put stores the entry, stamping UpdatedAt and CreatedAt.
 func (j *Journal) Put(ctx context.Context, entry JournalEntry) error {
-	if err := validateJournalEntry(entry.Key, entry); err != nil {
+	if err := ValidateJournalEntry(entry); err != nil {
 		return err
 	}
 	return j.withFileLock(ctx, func() error {
@@ -272,14 +283,22 @@ func (j *Journal) read() (journalFile, error) {
 		return journalFile{}, fmt.Errorf("youtube: journal file %s has null or missing entries", j.path)
 	}
 	for k, entry := range parsed.Entries {
-		if err := validateJournalEntry(k, entry); err != nil {
+		if err := ValidateJournalEntryWithKey(k, entry); err != nil {
 			return journalFile{}, err
 		}
 	}
 	return parsed, nil
 }
 
-func validateJournalEntry(key string, entry JournalEntry) error {
+// ValidateJournalEntry enforces all consumer-owned upload journal invariants
+// across file and database implementations.
+func ValidateJournalEntry(entry JournalEntry) error {
+	return ValidateJournalEntryWithKey(entry.Key, entry)
+}
+
+// ValidateJournalEntryWithKey validates an upload journal entry against its
+// expected map/storage key.
+func ValidateJournalEntryWithKey(key string, entry JournalEntry) error {
 	if strings.TrimSpace(key) == "" || entry.Key != key {
 		return fmt.Errorf("youtube: journal entry %q has mismatched or empty key %q", key, entry.Key)
 	}

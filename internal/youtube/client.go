@@ -30,7 +30,7 @@ type Client struct {
 	http           *http.Client
 	baseURL        string
 	uploadURL      string
-	journal        *Journal
+	journal        UploadJournal
 	maxAttempts    int
 	baseDelay      time.Duration
 	maxDelay       time.Duration
@@ -62,7 +62,7 @@ func WithUploadURL(raw string) Option {
 }
 
 // WithJournal attaches the idempotency journal.
-func WithJournal(journal *Journal) Option {
+func WithJournal(journal UploadJournal) Option {
 	return func(c *Client) { c.journal = journal }
 }
 

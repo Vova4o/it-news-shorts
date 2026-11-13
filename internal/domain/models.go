@@ -275,17 +275,18 @@ type MediaKind string
 
 // Media kinds.
 const (
-	MediaVoiceover  MediaKind = "VOICEOVER"
-	MediaBackground MediaKind = "BACKGROUND"
-	MediaClip       MediaKind = "CLIP"
-	MediaRendered   MediaKind = "RENDERED_VIDEO"
-	MediaThumbnail  MediaKind = "THUMBNAIL"
+	MediaVoiceover     MediaKind = "VOICEOVER"
+	MediaBackground    MediaKind = "BACKGROUND"
+	MediaClip          MediaKind = "CLIP"
+	MediaRendered      MediaKind = "RENDERED_VIDEO"
+	MediaThumbnail     MediaKind = "THUMBNAIL"
+	MediaSmokeArtifact MediaKind = "SMOKE_ARTIFACT"
 )
 
 // Valid reports whether the kind is known.
 func (k MediaKind) Valid() bool {
 	switch k {
-	case MediaVoiceover, MediaBackground, MediaClip, MediaRendered, MediaThumbnail:
+	case MediaVoiceover, MediaBackground, MediaClip, MediaRendered, MediaThumbnail, MediaSmokeArtifact:
 		return true
 	default:
 		return false
