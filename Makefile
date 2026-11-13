@@ -1,7 +1,8 @@
 GO ?= go
 BIN_DIR ?= bin
+TEST_VIDEO ?= testdata/test-short.mp4
 
-.PHONY: all fmt fmt-check vet test race build ci clean
+.PHONY: all fmt fmt-check vet test race build ci clean test-video
 
 all: ci
 
@@ -28,6 +29,10 @@ build:
 	$(GO) build -o $(BIN_DIR)/cli ./cmd/cli
 
 ci: fmt-check vet test race
+
+# Builds the reproducible test clip used by the YouTube integration check.
+test-video:
+	./scripts/make-test-video.sh $(TEST_VIDEO)
 
 clean:
 	rm -rf $(BIN_DIR)
