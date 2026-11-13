@@ -49,6 +49,19 @@ const (
 	defaultNewsHNBaseURL         = "https://hacker-news.firebaseio.com/v0"
 	defaultNewsHNLimit           = 30
 	defaultNewsRSSLimit          = 50
+
+	defaultLLMProvider              = "openai"
+	defaultLLMModel                 = "gpt-4o-mini"
+	defaultLLMBaseURL               = "https://api.openai.com/v1"
+	defaultLLMTimeout               = 60 * time.Second
+	defaultLLMMaxConcurrentRequests = 3
+	defaultLLMDailyBudgetUSD        = 2.0
+	defaultLLMInputCostPer1MUSD     = 0.15
+	defaultLLMOutputCostPer1MUSD    = 0.60
+
+	defaultEditorMaxStories        = 3
+	defaultEditorLanguage          = "ru"
+	defaultEditorMinVerifiedClaims = 2
 )
 
 // Config holds all infrastructure and runtime configuration.
@@ -60,6 +73,28 @@ type Config struct {
 	MinIO    MinIOConfig
 	Temporal TemporalConfig
 	News     NewsConfig
+	LLM      LLMConfig
+	Editor   EditorConfig
+}
+
+// LLMConfig holds LLM provider, rate-limit, and budget settings.
+type LLMConfig struct {
+	Provider              string
+	Model                 string
+	APIKey                string
+	BaseURL               string
+	Timeout               time.Duration
+	MaxConcurrentRequests int
+	DailyBudgetUSD        float64
+	InputCostPer1MUSD     float64
+	OutputCostPer1MUSD    float64
+}
+
+// EditorConfig holds AI news editor selection and verification thresholds.
+type EditorConfig struct {
+	MaxStories        int
+	Language          string
+	MinVerifiedClaims int
 }
 
 // NewsConfig holds news collector, HTTP client, and schedule settings.
@@ -271,6 +306,42 @@ func Load(lookup func(string) (string, bool)) (Config, error) {
 	cfg.News.RSSLimit = int(rssLimit)
 	cfg.News.ExtraRSSSources = get("NEWS_EXTRA_RSS_SOURCES", "")
 
+	cfg.LLM.Provider = strings.ToLower(get("LLM_PROVIDER", defaultLLMProvider))
+	cfg.LLM.Model = get("LLM_MODEL", defaultLLMModel)
+	cfg.LLM.APIKey = get("LLM_API_KEY", "")
+	cfg.LLM.BaseURL = strings.TrimRight(get("LLM_BASE_URL", defaultLLMBaseURL), "/")
+	llmTimeoutSecs, err := parseInt32(lookup, "LLM_TIMEOUT_SECONDS", int32(defaultLLMTimeout/time.Second))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.LLM.Timeout = time.Duration(llmTimeoutSecs) * time.Second
+	llmConc, err := parseInt32(lookup, "LLM_MAX_CONCURRENT_REQUESTS", defaultLLMMaxConcurrentRequests)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.LLM.MaxConcurrentRequests = int(llmConc)
+	if cfg.LLM.DailyBudgetUSD, err = parseFloat64(lookup, "LLM_DAILY_BUDGET_USD", defaultLLMDailyBudgetUSD); err != nil {
+		return Config{}, err
+	}
+	if cfg.LLM.InputCostPer1MUSD, err = parseFloat64(lookup, "LLM_INPUT_COST_PER_1M_USD", defaultLLMInputCostPer1MUSD); err != nil {
+		return Config{}, err
+	}
+	if cfg.LLM.OutputCostPer1MUSD, err = parseFloat64(lookup, "LLM_OUTPUT_COST_PER_1M_USD", defaultLLMOutputCostPer1MUSD); err != nil {
+		return Config{}, err
+	}
+
+	maxStories, err := parseInt32(lookup, "EDITOR_MAX_STORIES", defaultEditorMaxStories)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Editor.MaxStories = int(maxStories)
+	cfg.Editor.Language = strings.ToLower(get("EDITOR_LANGUAGE", defaultEditorLanguage))
+	minClaims, err := parseInt32(lookup, "EDITOR_MIN_VERIFIED_CLAIMS", defaultEditorMinVerifiedClaims)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Editor.MinVerifiedClaims = int(minClaims)
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -332,6 +403,24 @@ func (c Config) Validate() error {
 	}
 	if c.News.RSSLimit < 1 {
 		return fmt.Errorf("config: NEWS_RSS_LIMIT must be >= 1")
+	}
+	if c.LLM.Timeout <= 0 {
+		return fmt.Errorf("config: LLM_TIMEOUT_SECONDS must be positive")
+	}
+	if c.LLM.MaxConcurrentRequests < 1 {
+		return fmt.Errorf("config: LLM_MAX_CONCURRENT_REQUESTS must be >= 1")
+	}
+	if c.LLM.DailyBudgetUSD < 0 {
+		return fmt.Errorf("config: LLM_DAILY_BUDGET_USD must be >= 0")
+	}
+	if c.LLM.InputCostPer1MUSD < 0 || c.LLM.OutputCostPer1MUSD < 0 {
+		return fmt.Errorf("config: LLM token costs must be >= 0")
+	}
+	if c.Editor.MaxStories < 1 || c.Editor.MaxStories > 3 {
+		return fmt.Errorf("config: EDITOR_MAX_STORIES must be between 1 and 3")
+	}
+	if c.Editor.MinVerifiedClaims < 1 {
+		return fmt.Errorf("config: EDITOR_MIN_VERIFIED_CLAIMS must be >= 1")
 	}
 	return nil
 }
@@ -488,4 +577,16 @@ func parseBool(lookup func(string) (string, bool), key string, fallback bool) (b
 		return false, fmt.Errorf("config: parse %s: %w", key, err)
 	}
 	return b, nil
+}
+
+func parseFloat64(lookup func(string) (string, bool), key string, fallback float64) (float64, error) {
+	v, ok := lookup(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return fallback, nil
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+	if err != nil {
+		return 0, fmt.Errorf("config: parse %s: %w", key, err)
+	}
+	return f, nil
 }

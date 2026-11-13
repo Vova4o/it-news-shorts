@@ -16,6 +16,7 @@ import (
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/it-news-shorts/it-news-shorts/internal/ai"
 	"github.com/it-news-shorts/it-news-shorts/internal/config"
 	"github.com/it-news-shorts/it-news-shorts/internal/news"
 	"github.com/it-news-shorts/it-news-shorts/internal/observability"
@@ -108,6 +109,30 @@ func main() {
 		Logger:     logger,
 		Metrics:    metrics,
 	}
+	prompts, err := ai.LoadEmbeddedPrompts()
+	if err != nil {
+		logger.Error("load embedded prompts failed", "error", err.Error())
+		os.Exit(1)
+	}
+	editorRepo := postgres.NewEditorRepository(pgPool, cfg.Postgres.QueryTimeout)
+	budget := ai.NewBudgetTracker(cfg.LLM.DailyBudgetUSD)
+	var llmProvider ai.LLMProvider
+	if cfg.LLM.APIKey != "" {
+		llmProvider = ai.NewOpenAIProvider(cfg.LLM, budget, logger)
+	} else {
+		logger.Warn("llm api key not configured; DailyEditorialWorkflow will reject live LLM runs until LLM_API_KEY is set")
+	}
+	editorialActivities := &workflows.EditorialActivities{
+		NewsRepo:     newsRepo,
+		EditorRepo:   editorRepo,
+		LLM:          llmProvider,
+		Prompts:      prompts,
+		Budget:       budget,
+		LLMConfig:    cfg.LLM,
+		EditorConfig: cfg.Editor,
+		Logger:       logger,
+		Metrics:      metrics,
+	}
 
 	w := worker.New(temporalClient, cfg.Temporal.TaskQueue, worker.Options{
 		WorkerStopTimeout: cfg.Worker.ShutdownTimeout,
@@ -121,6 +146,9 @@ func main() {
 	w.RegisterWorkflowWithOptions(workflows.DailyNewsSnapshotWorkflow, workflow.RegisterOptions{
 		Name: workflows.DailyNewsSnapshotWorkflowName,
 	})
+	w.RegisterWorkflowWithOptions(workflows.DailyEditorialWorkflow, workflow.RegisterOptions{
+		Name: workflows.DailyEditorialWorkflowName,
+	})
 	w.RegisterActivityWithOptions(activities.CreateSmokeRun, activity.RegisterOptions{Name: "CreateSmokeRun"})
 	w.RegisterActivityWithOptions(activities.UploadAndVerifyArtifact, activity.RegisterOptions{Name: "UploadAndVerifyArtifact"})
 	w.RegisterActivityWithOptions(activities.PersistMediaAsset, activity.RegisterOptions{Name: "PersistMediaAsset"})
@@ -129,6 +157,16 @@ func main() {
 	w.RegisterActivityWithOptions(newsActivities.ListEnabledSources, activity.RegisterOptions{Name: "ListEnabledSources"})
 	w.RegisterActivityWithOptions(newsActivities.FetchAndPersistSource, activity.RegisterOptions{Name: "FetchAndPersistSource"})
 	w.RegisterActivityWithOptions(newsActivities.CreateDailySnapshot, activity.RegisterOptions{Name: "CreateDailySnapshot"})
+	w.RegisterActivityWithOptions(editorialActivities.LoadDailySnapshot, activity.RegisterOptions{Name: "LoadDailySnapshot"})
+	w.RegisterActivityWithOptions(editorialActivities.PreprocessArticles, activity.RegisterOptions{Name: "PreprocessArticles"})
+	w.RegisterActivityWithOptions(editorialActivities.ClusterStories, activity.RegisterOptions{Name: "ClusterStories"})
+	w.RegisterActivityWithOptions(editorialActivities.ExtractClaims, activity.RegisterOptions{Name: "ExtractClaims"})
+	w.RegisterActivityWithOptions(editorialActivities.VerifyClaims, activity.RegisterOptions{Name: "VerifyClaims"})
+	w.RegisterActivityWithOptions(editorialActivities.FilterEligibleStories, activity.RegisterOptions{Name: "FilterEligibleStories"})
+	w.RegisterActivityWithOptions(editorialActivities.ScoreStories, activity.RegisterOptions{Name: "ScoreStories"})
+	w.RegisterActivityWithOptions(editorialActivities.SelectTopStories, activity.RegisterOptions{Name: "SelectTopStories"})
+	w.RegisterActivityWithOptions(editorialActivities.PersistEditorialResults, activity.RegisterOptions{Name: "PersistEditorialResults"})
+	w.RegisterActivityWithOptions(editorialActivities.GenerateEditorialReport, activity.RegisterOptions{Name: "GenerateEditorialReport"})
 
 	if err := workflows.EnsureNewsSchedules(ctx, temporalClient, cfg.Temporal.TaskQueue, cfg.News, logger); err != nil {
 		logger.Error("ensure news schedules failed", "error", err.Error())

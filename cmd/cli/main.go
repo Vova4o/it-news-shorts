@@ -25,13 +25,15 @@ func main() {
 		runInfra(os.Args[2:])
 	case "news":
 		runNews(os.Args[2:])
+	case "editor":
+		runEditor(os.Args[2:])
 	case "version":
 		fmt.Printf("it-news-shorts %s\n", version)
 	case "help":
-		fmt.Println("usage: cli [schedule|youtube|infra|news|version]")
+		fmt.Println("usage: cli [schedule|youtube|infra|news|editor|version]")
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n", command)
-		fmt.Println("usage: cli [schedule|youtube|infra|news|version]")
+		fmt.Println("usage: cli [schedule|youtube|infra|news|editor|version]")
 		os.Exit(1)
 	}
 }

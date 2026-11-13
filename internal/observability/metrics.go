@@ -26,6 +26,17 @@ type Metrics struct {
 	NewsDuplicatesTotal       *prometheus.CounterVec
 	NewsFetchDurationSeconds  *prometheus.HistogramVec
 	NewsSourceLastSuccessTS   *prometheus.GaugeVec
+	EditorRunsTotal           *prometheus.CounterVec
+	EditorRunsFailedTotal     *prometheus.CounterVec
+	EditorStoriesProcessed    prometheus.Counter
+	EditorStoriesVerified     prometheus.Counter
+	EditorStoriesRejected     *prometheus.CounterVec
+	EditorClaimsVerified      *prometheus.CounterVec
+	EditorLLMRequestsTotal    *prometheus.CounterVec
+	EditorLLMErrorsTotal      *prometheus.CounterVec
+	EditorLLMTokensTotal      *prometheus.CounterVec
+	EditorLLMCostUSDTotal     *prometheus.CounterVec
+	EditorWorkflowDurationSec *prometheus.HistogramVec
 }
 
 // NewMetrics creates a new isolated Prometheus registry and registers all
@@ -100,6 +111,51 @@ func NewMetrics() *Metrics {
 			Name: "news_source_last_success_timestamp",
 			Help: "Unix timestamp of the last successful fetch per news source.",
 		}, []string{"source_id"}),
+		EditorRunsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "editor_runs_total",
+			Help: "Total number of editorial workflow runs.",
+		}, []string{"status"}),
+		EditorRunsFailedTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "editor_runs_failed_total",
+			Help: "Total number of failed editorial workflow runs.",
+		}, []string{"reason"}),
+		EditorStoriesProcessed: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "editor_stories_processed_total",
+			Help: "Total number of clustered stories processed by the editor.",
+		}),
+		EditorStoriesVerified: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "editor_stories_verified_total",
+			Help: "Total number of stories passing fact verification.",
+		}),
+		EditorStoriesRejected: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "editor_stories_rejected_total",
+			Help: "Total number of stories rejected by the editor.",
+		}, []string{"reason"}),
+		EditorClaimsVerified: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "editor_claims_verified_total",
+			Help: "Total number of claims evaluated by verification status.",
+		}, []string{"status"}),
+		EditorLLMRequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "editor_llm_requests_total",
+			Help: "Total number of LLM requests made by the editor.",
+		}, []string{"operation", "model", "status"}),
+		EditorLLMErrorsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "editor_llm_errors_total",
+			Help: "Total number of LLM errors encountered by the editor.",
+		}, []string{"operation", "error_type"}),
+		EditorLLMTokensTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "editor_llm_tokens_total",
+			Help: "Total number of LLM tokens consumed by the editor.",
+		}, []string{"operation", "model", "token_type"}),
+		EditorLLMCostUSDTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "editor_llm_cost_usd_total",
+			Help: "Total USD cost of LLM requests made by the editor.",
+		}, []string{"operation", "model"}),
+		EditorWorkflowDurationSec: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "editor_workflow_duration_seconds",
+			Help:    "Duration of DailyEditorialWorkflow executions in seconds.",
+			Buckets: prometheus.DefBuckets,
+		}, []string{"status"}),
 	}
 
 	reg.MustRegister(
@@ -116,6 +172,17 @@ func NewMetrics() *Metrics {
 		m.NewsDuplicatesTotal,
 		m.NewsFetchDurationSeconds,
 		m.NewsSourceLastSuccessTS,
+		m.EditorRunsTotal,
+		m.EditorRunsFailedTotal,
+		m.EditorStoriesProcessed,
+		m.EditorStoriesVerified,
+		m.EditorStoriesRejected,
+		m.EditorClaimsVerified,
+		m.EditorLLMRequestsTotal,
+		m.EditorLLMErrorsTotal,
+		m.EditorLLMTokensTotal,
+		m.EditorLLMCostUSDTotal,
+		m.EditorWorkflowDurationSec,
 	)
 
 	return m
